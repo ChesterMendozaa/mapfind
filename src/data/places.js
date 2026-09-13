@@ -15,30 +15,11 @@ export const CATEGORIES = [
   { id: 'school',   label: 'Schools',      emoji: '🏫', geoapify: 'education' },
 ];
 
-export const POPULAR_SEARCHES = [
-  'Jollibee', "McDonald's", 'SM', 'Chooks to Go', 'Starbucks', 'Mercury Drug',
-];
-
 // Default center: Los Baños, Laguna, Philippines
 export const DEFAULT_CENTER = [14.1695, 121.2411];
 
-// Broad categories sent with every text search so we don't miss results.
-const BROAD_CATEGORIES = [
-  'catering',
-  'commercial',
-  'service',
-  'healthcare',
-  'accommodation',
-  'education',
-  'entertainment',
-  'tourism',
-  'leisure',
-  'natural',
-].join(',');
-
 // ---------- Helpers ----------
 
-// Map Geoapify category strings back to MapFind's category ids
 function mapCategory(categories = []) {
   const c = categories.join(' ').toLowerCase();
   if (c.includes('cafe')) return 'coffee';
@@ -52,7 +33,6 @@ function mapCategory(categories = []) {
   return 'shopping';
 }
 
-// Convert a Geoapify feature into MapFind's place shape
 function normalize(feature) {
   const p = feature.properties || {};
   const [lng, lat] = feature.geometry?.coordinates || [0, 0];
@@ -64,18 +44,16 @@ function normalize(feature) {
     category: mapCategory(p.categories),
     lat,
     lng,
-    rating: 4.0,          // Geoapify does not return ratings — placeholder
+    rating: 4.0,
     reviews: 0,
     address: p.address_line2 || p.formatted || '',
     phone: p.contact?.phone || null,
-    hours: null,          // Geoapify returns opening_hours as a string — see note below
+    hours: null,
     description: (p.categories || []).slice(0, 3).map((s) => s.replace(/\./g, ' ')).join(' · '),
     keywords: [p.name, p.brand, ...(p.categories || [])].filter(Boolean).map((s) => String(s).toLowerCase()),
   };
 }
 
-// Try to parse Geoapify's opening_hours string into { open, close, days }
-// Geoapify formats like "Mo-Fr 08:00-22:00" or "24/7". Best-effort only.
 function parseHours(raw) {
   if (!raw) return null;
   if (/24\/7/i.test(raw)) {
@@ -127,41 +105,46 @@ function relevanceScore(place, query) {
   return 4;
 }
 
-// Text/brand search — used for the header search bar.
-// Strategy:
-//   1. Strict `name` filter, 15 km radius
-//   2. Strict `name` filter, 50 km radius
-//   3. Fuzzy `text` filter, then client-side sanity check on name/brand
-// Results are ranked so exact-name matches float to the top.
-export async function searchPlaces(query, center = DEFAULT_CENTER, radiusMeters = 15000) {
+/**
+ * Search for places within a specific category.
+ * @param {string} categoryId  e.g. 'school'
+ * @param {string} [query]     optional text query, scoped to this category only
+ * @param {[number,number]} center
+ * @param {number} radiusMeters
+ */
+export async function searchByCategory(
+  categoryId,
+  query = '',
+  center = DEFAULT_CENTER,
+  radiusMeters = 15000
+) {
+  const cat = CATEGORIES.find((c) => c.id === categoryId);
+  if (!cat) return [];
   const [lat, lng] = center;
   const trimmed = (query || '').trim();
-  if (!trimmed) return [];
 
-  const strictCall = (radius) =>
+  const call = (radius, params = {}) =>
     callGeoapify({
-      categories: BROAD_CATEGORIES,
-      name: trimmed,
+      categories: cat.geoapify,
       filter: `circle:${lng},${lat},${radius}`,
       limit: 30,
+      ...params,
     });
 
-  // 1) Strict name, tight radius
-  let results = await strictCall(radiusMeters);
+  // No query → just return everything in the category
+  if (!trimmed) return call(radiusMeters);
 
-  // 2) Strict name, wide radius
+  // With query → strict name first
+  let results = await call(radiusMeters, { name: trimmed });
+
+  // Widen if nothing
   if (results.length === 0) {
-    results = await strictCall(50000);
+    results = await call(50000, { name: trimmed });
   }
 
-  // 3) Fuzzy fallback, then filter out irrelevant hits
+  // Fuzzy fallback with client-side filter
   if (results.length === 0) {
-    const fuzzy = await callGeoapify({
-      categories: BROAD_CATEGORIES,
-      text: trimmed,
-      filter: `circle:${lng},${lat},${radiusMeters}`,
-      limit: 30,
-    });
+    const fuzzy = await call(radiusMeters, { text: trimmed });
     const q = trimmed.toLowerCase();
     results = fuzzy.filter((p) => {
       const hay = `${p.name || ''} ${p.brand || ''}`.toLowerCase();
@@ -171,16 +154,4 @@ export async function searchPlaces(query, center = DEFAULT_CENTER, radiusMeters 
 
   results.sort((a, b) => relevanceScore(a, trimmed) - relevanceScore(b, trimmed));
   return results;
-}
-
-// Category search — used by the category buttons
-export async function searchByCategory(categoryId, center = DEFAULT_CENTER, radiusMeters = 15000) {
-  const cat = CATEGORIES.find((c) => c.id === categoryId);
-  if (!cat) return [];
-  const [lat, lng] = center;
-  return callGeoapify({
-    categories: cat.geoapify,
-    filter: `circle:${lng},${lat},${radiusMeters}`,
-    limit: 30,
-  });
 }

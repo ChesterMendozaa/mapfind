@@ -1,4 +1,3 @@
-import SearchBar from './SearchBar.jsx';
 import {
   FaMapMarkerAlt,
   FaCrosshairs,
@@ -7,9 +6,6 @@ import {
 } from 'react-icons/fa';
 
 export default function Header({
-  query,
-  onQueryChange,
-  onSubmit,
   onNearMe,
   savedCount,
   onToggleSavedPanel,
@@ -23,15 +19,6 @@ export default function Header({
           <FaMapMarkerAlt />
         </div>
         <span>MapFind</span>
-      </div>
-
-      <div className="header-search">
-        <SearchBar
-          value={query}
-          onChange={onQueryChange}
-          onSubmit={onSubmit}
-          placeholder="Search places, brands, or categories..."
-        />
       </div>
 
       <div className="header-actions">

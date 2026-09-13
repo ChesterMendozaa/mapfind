@@ -1,26 +1,44 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header.jsx';
 import MapView from './components/MapView.jsx';
 import SearchResults from './components/SearchResults.jsx';
 import PlaceDetails from './components/PlaceDetails.jsx';
 import FilterBar from './components/FilterBar.jsx';
 import BottomSheet from './components/BottomSheet.jsx';
+import SearchBar from './components/SearchBar.jsx';
+import RecentDropdown from './components/RecentDropdown.jsx';
+import SplashScreen from './components/SplashScreen.jsx';
 import Home from './pages/Home.jsx';
 import SavedPlaces from './pages/SavedPlaces.jsx';
 import { FaArrowLeft, FaExclamationTriangle } from 'react-icons/fa';
-import {
-  searchPlaces,
-  searchByCategory,
-  DEFAULT_CENTER,
-} from './data/places.js';
+import { searchByCategory, DEFAULT_CENTER } from './data/places.js';
 import { haversineKm, applyFilters } from './utils/location.js';
 import { useLocalStorage } from './hooks/useLocalStorage.js';
 import { fetchRoute } from './utils/routing.js';
 
+// Keep only valid { query, category, at } entries
+function sanitizeRecents(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((r) => {
+      if (
+        r &&
+        typeof r === 'object' &&
+        typeof r.query === 'string' &&
+        typeof r.category === 'string'
+      ) {
+        return { query: r.query, category: r.category, at: r.at || 0 };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
 export default function App() {
-  const [query, setQuery] = useState('');
-  const [submittedQuery, setSubmittedQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState(null);
+  const [categoryQuery, setCategoryQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filter, setFilter] = useState('all');
   const [selectedId, setSelectedId] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -32,6 +50,9 @@ export default function App() {
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
   );
 
+  // Splash screen
+  const [appReady, setAppReady] = useState(false);
+
   const [rawResults, setRawResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -41,8 +62,87 @@ export default function App() {
   const [routeError, setRouteError] = useState(null);
 
   const [savedIds, setSavedIds] = useLocalStorage('mapfind.saved', []);
-  const [recentSearches, setRecentSearches] = useLocalStorage('mapfind.recent', []);
+  const [recentSearches, setRecentSearchesRaw] = useLocalStorage('mapfind.recent', []);
   const [placeCache, setPlaceCache] = useState({});
+
+  // Sanitized setter — never let bad data in or out
+  const setRecentSearches = useCallback((updater) => {
+    setRecentSearchesRaw((prev) => {
+      const cleaned = sanitizeRecents(prev);
+      const next = typeof updater === 'function' ? updater(cleaned) : updater;
+      return sanitizeRecents(next);
+    });
+  }, [setRecentSearchesRaw]);
+
+  // One-time migration on mount
+  useEffect(() => {
+    setRecentSearchesRaw((prev) => {
+      const cleaned = sanitizeRecents(prev);
+      if (cleaned.length !== (Array.isArray(prev) ? prev.length : 0)) {
+        return cleaned;
+      }
+      return prev;
+    });
+  }, [setRecentSearchesRaw]);
+
+  // Hide splash on first paint. Minimum 800 ms so it doesn't flash.
+  useEffect(() => {
+    const MIN_SHOW = 800;
+    const start = performance.now();
+    const t = setTimeout(() => {
+      const elapsed = performance.now() - start;
+      const remaining = Math.max(0, MIN_SHOW - elapsed);
+      setTimeout(() => setAppReady(true), remaining);
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Fetch debounce — 300 ms (feels responsive)
+  const fetchTimer = useRef(null);
+  useEffect(() => {
+    if (fetchTimer.current) clearTimeout(fetchTimer.current);
+    fetchTimer.current = setTimeout(() => {
+      setDebouncedQuery(categoryQuery);
+    }, 300);
+    return () => {
+      if (fetchTimer.current) clearTimeout(fetchTimer.current);
+    };
+  }, [categoryQuery]);
+
+  // Commit a query to recents (dedupes within same category)
+  const commitRecent = useCallback((q) => {
+    const trimmed = (q || '').trim();
+    if (!trimmed || !activeCategory) return;
+    setRecentSearches((prev) => {
+      const filtered = prev.filter(
+        (r) =>
+          !(
+            r.query.toLowerCase() === trimmed.toLowerCase() &&
+            r.category === activeCategory
+          )
+      );
+      return [
+        { query: trimmed, category: activeCategory, at: Date.now() },
+        ...filtered,
+      ].slice(0, 24);
+    });
+  }, [activeCategory, setRecentSearches]);
+
+  // Save timer — 1500 ms idle (means "user is done typing")
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const q = categoryQuery.trim();
+    if (!q || !activeCategory) return;
+
+    saveTimer.current = setTimeout(() => {
+      commitRecent(q);
+    }, 1500);
+
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [categoryQuery, activeCategory, commitRecent]);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 900);
@@ -52,10 +152,23 @@ export default function App() {
 
   const savedSet = useMemo(() => new Set(savedIds), [savedIds]);
 
+  const categoryRecents = useMemo(() => {
+    if (!activeCategory) return [];
+    return recentSearches
+      .filter(
+        (r) =>
+          r &&
+          typeof r.query === 'string' &&
+          r.category === activeCategory
+      )
+      .slice(0, 6);
+  }, [recentSearches, activeCategory]);
+
+  // ---------- Fetch ----------
   useEffect(() => {
     let cancelled = false;
 
-    if (!submittedQuery && !activeCategory) {
+    if (!activeCategory) {
       setRawResults([]);
       setError(null);
       setLoading(false);
@@ -70,12 +183,11 @@ export default function App() {
           ? [userLocation.lat, userLocation.lng]
           : DEFAULT_CENTER;
 
-        let places = [];
-        if (activeCategory) {
-          places = await searchByCategory(activeCategory, center);
-        } else {
-          places = await searchPlaces(submittedQuery, center);
-        }
+        let places = await searchByCategory(
+          activeCategory,
+          debouncedQuery,
+          center
+        );
 
         if (cancelled) return;
 
@@ -106,7 +218,7 @@ export default function App() {
 
     run();
     return () => { cancelled = true; };
-  }, [submittedQuery, activeCategory, userLocation]);
+  }, [activeCategory, debouncedQuery, userLocation]);
 
   const results = useMemo(() => {
     let list = [...rawResults];
@@ -130,36 +242,19 @@ export default function App() {
       .filter(Boolean);
   }, [savedIds, placeCache, results]);
 
+  const activeCategoryLabel = useMemo(
+    () => activeCategory
+      ? activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1)
+      : '',
+    [activeCategory]
+  );
+
   // ---------- Handlers ----------
-  const runSearch = useCallback((q) => {
-    const trimmed = (q ?? '').trim();
-    setQuery(trimmed);
-    setSubmittedQuery(trimmed);
-    setActiveCategory(null);
-    setSelectedId(null);
-    setSavedPanelOpen(false);
-    setRoute(null);
-    setRouteError(null);
-    if (trimmed) {
-      setRecentSearches((prev) => {
-        const next = [trimmed, ...prev.filter((x) => x.toLowerCase() !== trimmed.toLowerCase())];
-        return next.slice(0, 6);
-      });
-    }
-    if (isMobile) setSheetOpen(true);
-  }, [isMobile, setRecentSearches]);
-
-  const handleQueryChange = useCallback((value) => {
-    setQuery(value);
-    if (value && activeCategory) {
-      setActiveCategory(null);
-    }
-  }, [activeCategory]);
-
   const handleCategory = useCallback((cat) => {
     setActiveCategory((prev) => (prev === cat.id ? null : cat.id));
-    setSubmittedQuery('');
-    setQuery('');
+    setCategoryQuery('');
+    setDebouncedQuery('');
+    setDropdownOpen(false);
     setSelectedId(null);
     setRoute(null);
     setRouteError(null);
@@ -168,6 +263,9 @@ export default function App() {
 
   const clearCategory = useCallback(() => {
     setActiveCategory(null);
+    setCategoryQuery('');
+    setDebouncedQuery('');
+    setDropdownOpen(false);
     setSelectedId(null);
     setRoute(null);
     setRouteError(null);
@@ -247,13 +345,119 @@ export default function App() {
     setSelectedId((prev) => (prev === id ? null : id));
     setRoute(null);
     setRouteError(null);
+    // Clicking a place = "this search was useful" → commit it
+    commitRecent(categoryQuery);
     if (isMobile) setSheetOpen(true);
-  }, [isMobile]);
+  }, [categoryQuery, commitRecent, isMobile]);
 
   const selectSaved = useCallback((id) => {
     setSavedPanelOpen(false);
     setSelectedId(id);
   }, []);
+
+  const clearCategoryRecents = useCallback(() => {
+    setRecentSearches((prev) => prev.filter((r) => r.category !== activeCategory));
+  }, [activeCategory, setRecentSearches]);
+
+  // ---------- Results panel ----------
+  const renderResultsPanel = () => (
+    <div className="results">
+      <div className="results-head">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <button
+            className="icon-btn"
+            onClick={clearCategory}
+            style={{ padding: 8, minHeight: 34, minWidth: 34 }}
+            aria-label="Back to discovery"
+            title="Back"
+          >
+            <FaArrowLeft size={12} />
+          </button>
+          <h2
+            className="results-title"
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {activeCategoryLabel}
+          </h2>
+        </div>
+        <span className="results-count">
+          {loading ? 'Searching…' : `${results.length} found`}
+        </span>
+      </div>
+
+      <div className="panel-search">
+        <SearchBar
+          value={categoryQuery}
+          onChange={(v) => {
+            setCategoryQuery(v);
+            if (v === '') setDropdownOpen(true);
+          }}
+          onSubmit={() => {
+            setDebouncedQuery(categoryQuery);
+            commitRecent(categoryQuery);
+          }}
+          placeholder={`Search in ${activeCategoryLabel}…`}
+          onFocus={() => {
+            if (categoryQuery === '') setDropdownOpen(true);
+          }}
+          onBlur={() => {
+            setTimeout(() => setDropdownOpen(false), 120);
+          }}
+        >
+          {dropdownOpen && categoryRecents.length > 0 && (
+            <RecentDropdown
+              items={categoryRecents}
+              onPick={(q) => {
+                setCategoryQuery(q);
+                setDebouncedQuery(q);
+                commitRecent(q);
+              }}
+              onClearAll={clearCategoryRecents}
+              onClose={() => setDropdownOpen(false)}
+            />
+          )}
+        </SearchBar>
+      </div>
+
+      <FilterBar
+        value={filter}
+        onChange={setFilter}
+        disabledNearest={!userLocation}
+      />
+
+      {error && (
+        <div className="empty error">
+          <div className="empty-icon">
+            <FaExclamationTriangle size={22} />
+          </div>
+          <h3>Something went wrong</h3>
+          <p>{error}</p>
+        </div>
+      )}
+
+      {!error && loading && (
+        <div className="empty">
+          <div className="empty-icon">
+            <div className="spinner" />
+          </div>
+          <h3>Searching…</h3>
+          <p>Looking for matches near you.</p>
+        </div>
+      )}
+
+      {!error && !loading && (
+        <SearchResults
+          query={debouncedQuery}
+          results={results}
+          selectedId={selectedId}
+          savedIds={savedSet}
+          onSelect={selectPlace}
+          onToggleSave={toggleSave}
+          onDirections={handleDirections}
+        />
+      )}
+    </div>
+  );
 
   const sideContent = (() => {
     if (savedPanelOpen) {
@@ -276,81 +480,14 @@ export default function App() {
         />
       );
     }
-    if (submittedQuery || activeCategory) {
-      return (
-        <div className="results">
-          <div className="results-head">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <button
-                className="icon-btn"
-                onClick={() => {
-                  setSubmittedQuery('');
-                  setActiveCategory(null);
-                  setSelectedId(null);
-                  setQuery('');
-                }}
-                style={{ padding: 8, minHeight: 34, minWidth: 34 }}
-                aria-label="Back to discovery"
-                title="Back"
-              >
-                <FaArrowLeft size={12} />
-              </button>
-              <h2 className="results-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {submittedQuery ? `"${submittedQuery}"` : `Category: ${activeCategory}`}
-              </h2>
-            </div>
-            <span className="results-count">
-              {loading ? 'Searching…' : `${results.length} found`}
-            </span>
-          </div>
-
-          <FilterBar
-            value={filter}
-            onChange={setFilter}
-            disabledNearest={!userLocation}
-          />
-
-          {error && (
-            <div className="empty error">
-              <div className="empty-icon">
-                <FaExclamationTriangle size={22} />
-              </div>
-              <h3>Something went wrong</h3>
-              <p>{error}</p>
-            </div>
-          )}
-
-          {!error && loading && (
-            <div className="empty">
-              <div className="empty-icon">
-                <div className="spinner" />
-              </div>
-              <h3>Searching…</h3>
-              <p>Looking for matches near you.</p>
-            </div>
-          )}
-
-          {!error && !loading && (
-            <SearchResults
-              query={submittedQuery}
-              results={results}
-              selectedId={selectedId}
-              savedIds={savedSet}
-              onSelect={selectPlace}
-              onToggleSave={toggleSave}
-              onDirections={handleDirections}
-            />
-          )}
-        </div>
-      );
+    if (activeCategory) {
+      return renderResultsPanel();
     }
     return (
       <Home
         onSelectCategory={handleCategory}
         activeCategory={activeCategory}
         onClearCategory={clearCategory}
-        onSearch={runSearch}
-        recentSearches={recentSearches}
         userLocation={userLocation}
         onNearMe={handleNearMe}
       />
@@ -378,68 +515,14 @@ export default function App() {
         />
       );
     }
-    if (submittedQuery || activeCategory) {
-      return (
-        <div className="results">
-          <div className="results-head">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <button
-                className="icon-btn"
-                onClick={() => {
-                  setSubmittedQuery('');
-                  setActiveCategory(null);
-                  setSelectedId(null);
-                  setQuery('');
-                }}
-                style={{ padding: 8, minHeight: 34, minWidth: 34 }}
-                aria-label="Back to discovery"
-                title="Back"
-              >
-                <FaArrowLeft size={12} />
-              </button>
-              <h2 className="results-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {submittedQuery ? `"${submittedQuery}"` : `Category: ${activeCategory}`}
-              </h2>
-            </div>
-            <span className="results-count">
-              {loading ? 'Searching…' : `${results.length} found`}
-            </span>
-          </div>
-          <FilterBar
-            value={filter}
-            onChange={setFilter}
-            disabledNearest={!userLocation}
-          />
-          {error && (
-            <div className="empty error">
-              <div className="empty-icon">
-                <FaExclamationTriangle size={22} />
-              </div>
-              <h3>Something went wrong</h3>
-              <p>{error}</p>
-            </div>
-          )}
-          {!error && !loading && (
-            <SearchResults
-              query={submittedQuery}
-              results={results}
-              selectedId={selectedId}
-              savedIds={savedSet}
-              onSelect={selectPlace}
-              onToggleSave={toggleSave}
-              onDirections={handleDirections}
-            />
-          )}
-        </div>
-      );
+    if (activeCategory) {
+      return renderResultsPanel();
     }
     return (
       <Home
         onSelectCategory={handleCategory}
         activeCategory={activeCategory}
         onClearCategory={clearCategory}
-        onSearch={runSearch}
-        recentSearches={recentSearches}
         userLocation={userLocation}
         onNearMe={handleNearMe}
       />
@@ -448,10 +531,9 @@ export default function App() {
 
   return (
     <div className="app">
+      <SplashScreen visible={!appReady} />
+
       <Header
-        query={query}
-        onQueryChange={handleQueryChange}
-        onSubmit={runSearch}
         onNearMe={handleNearMe}
         savedCount={savedIds.length}
         savedPanelOpen={savedPanelOpen}
