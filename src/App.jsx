@@ -46,6 +46,7 @@ export default function App() {
   const [locating, setLocating] = useState(false);
   const [savedPanelOpen, setSavedPanelOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const sheetRef = useRef(null);
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
   );
@@ -328,13 +329,16 @@ export default function App() {
         destinationId: place.id,
         destinationName: place.name,
       });
+
+      // Pull the sheet back to peek so the map + route are visible
+      if (isMobile) sheetRef.current?.snapTo('peek');
     } catch (err) {
       console.error(err);
       setRouteError(err.message || 'Could not calculate route.');
     } finally {
       setRouteLoading(false);
     }
-  }, [userLocation]);
+  }, [userLocation, isMobile]);
 
   const clearRoute = useCallback(() => {
     setRoute(null);
@@ -562,7 +566,12 @@ export default function App() {
       </div>
 
       {isMobile && (
-        <BottomSheet open={sheetOpen} onOpenChange={setSheetOpen} peek={260}>
+        <BottomSheet
+          ref={sheetRef}
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          peek={260}
+        >
           {sheetContent}
         </BottomSheet>
       )}
