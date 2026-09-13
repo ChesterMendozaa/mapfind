@@ -5,7 +5,7 @@ import {
 
 const SNAPS = {
   closed: 0,
-  peek: 0.28,
+  peek: 0.32,   // ← was 0.28 → slightly taller so categories fit
   half: 0.58,
   full: 0.90,
 };

@@ -200,21 +200,17 @@ export default function MapView({
         </div>
       )}
 
-      {/* Location count chip — top left */}
-      <div className={`map-overlay ${route ? 'has-banner' : ''}`}>
-        <div className="overlay-chip">
-          <FaLayerGroup size={12} />
-          {places.length === 0 ? (
-            <span>No matching places</span>
-          ) : (
-            <>
-              <span className="label-long">Showing&nbsp;</span>
-              <b>{places.length}</b>
-              <span>&nbsp;location{places.length !== 1 ? 's' : ''}</span>
-            </>
-          )}
+            {/* Location count chip — top left (only when there are results) */}
+      {places.length > 0 && (
+        <div className={`map-overlay ${route ? 'has-banner' : ''}`}>
+          <div className="overlay-chip">
+            <FaLayerGroup size={12} />
+            <span className="label-long">Showing&nbsp;</span>
+            <b>{places.length}</b>
+            <span>&nbsp;location{places.length !== 1 ? 's' : ''}</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

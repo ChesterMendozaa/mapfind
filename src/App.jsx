@@ -45,7 +45,9 @@ export default function App() {
   const [recenterTarget, setRecenterTarget] = useState(null);
   const [locating, setLocating] = useState(false);
   const [savedPanelOpen, setSavedPanelOpen] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(
+  typeof window !== 'undefined' ? window.innerWidth <= 900 : false
+);
   const sheetRef = useRef(null);
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth <= 900 : false
