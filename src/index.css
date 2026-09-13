@@ -821,3 +821,20 @@ input { font-family: inherit; }
   0%, 100% { opacity: .3; transform: translateY(0); }
   50%      { opacity: 1;  transform: translateY(-3px); }
 }
+
+/* ---------- Place details hero logo ---------- */
+.details-hero .hero-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+  object-fit: contain;
+  background: #fff;
+  padding: 12px;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, .08);
+  animation: heroPop .3s cubic-bezier(.2, .9, .3, 1.2) both;
+}
+
+@keyframes heroPop {
+  from { transform: scale(.85); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}

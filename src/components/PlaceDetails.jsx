@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { formatHours, isOpenNow, formatKm } from '../utils/location.js';
+import { getBrandLogoUrl } from '../utils/brandLogo.js';
 import {
   FaHamburger, FaCoffee, FaShoppingBag, FaUniversity, FaPills,
   FaGasPump, FaHotel, FaGraduationCap, FaMapMarkerAlt,
@@ -18,16 +20,36 @@ const ICONS = {
 };
 
 export default function PlaceDetails({ place, isSaved, onClose, onToggleSave, onDirections }) {
+  // Hooks must be called unconditionally — declared before the early return
+  const [logoFailed, setLogoFailed] = useState(false);
+
   if (!place) return null;
+
   const open = isOpenNow(place.hours);
   const Icon = ICONS[place.category] || FaShoppingBag;
+  const logoUrl = getBrandLogoUrl(place.brand || place.name);
+  const showLogo = logoUrl && !logoFailed;
 
   return (
     <div className="details">
       <div className="details-hero">
-        <div className="hero-icon">
-          <Icon size={28} />
-        </div>
+        {showLogo ? (
+          <img
+            src={logoUrl}
+            alt=""
+            className="hero-logo"
+            onLoad={(e) => {
+              // Google's favicon service returns a 16×16 generic globe when
+              // no favicon exists — treat that as a failure and fall back.
+              if (e.target.naturalWidth <= 16) setLogoFailed(true);
+            }}
+            onError={() => setLogoFailed(true)}
+          />
+        ) : (
+          <div className="hero-icon">
+            <Icon size={28} />
+          </div>
+        )}
         <button className="details-close" onClick={onClose} aria-label="Close">
           <FaTimes size={14} />
         </button>
